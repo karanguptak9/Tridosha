@@ -8,27 +8,28 @@ Educational only. It does not diagnose, treat or measure anything in the body. E
 
 | Build | File | Saves to |
 | --- | --- | --- |
-| Hosted site | `docs/index.html` | A Supabase database: email sign-up, several profiles per account |
+| Hosted site | `docs/index.html` | A Supabase database: no sign-in, several profiles per browser |
 | Single file | `tridosha.html` | The browser's local storage |
 
 ## Set up the hosted site
 
 1. **Create a Supabase project** at supabase.com (the free tier is enough).
-2. **Create the tables.** In the project's SQL editor, paste and run `supabase/migrations/0001_init.sql`. It creates `profiles` and `documents`, turns on row-level security so each account reaches only its own rows, caps accounts at 12 profiles, and adds the function behind "Delete my account".
+2. **Create the tables.** In the project's SQL editor, paste and run `supabase/migrations/0001_init.sql`. It creates `profiles` and `documents`, turns on row-level security so each visitor reaches only their own rows, caps each at 12 profiles, and adds the function behind "Delete all profiles".
 3. **Connect the site.** In Project Settings → API, copy the project URL and the `anon` public key into `docs/config.js`. The anon key is designed to be public; never put the `service_role` key there.
 4. **Publish.** In this repository's Settings → Pages, choose "Deploy from a branch", branch `main`, folder `/docs`. The site appears at `https://<user>.github.io/Tridosha/`.
-5. **Allow the site address.** In Supabase → Authentication → URL Configuration, set Site URL to that address, so confirmation and password-reset emails link back to it.
+5. **Turn on anonymous sign-ins.** In Supabase → Authentication → Sign In / Providers, enable "Allow anonymous sign-ins". The site has no sign-in screen; it uses this to give each browser its own private space. With it off, the site still works but saves to the browser only.
 
 Until step 3 is done the site runs in demo mode and saves to the browser only.
 
-Supabase's built-in email sender is rate-limited to a few messages an hour. For real use, add your own SMTP provider under Authentication → Emails, or turn off "Confirm email" while testing.
+Anonymous sign-ins are rate-limited per IP address (30 an hour by default), and Supabase recommends adding a CAPTCHA under Authentication → Attack Protection if the site gets abused.
 
-### How accounts and profiles work
+### How profiles work
 
-- Anyone can create an account with an email and password.
-- An account holds up to 12 profiles (for example one per family member). Each profile has its own questionnaire results, check-ins, meals, blends and weekly plan.
+- There is no sign-up. The first visit from a browser creates an anonymous Supabase user for it, silently.
+- That browser can hold up to 12 profiles (for example one per family member). Each profile has its own questionnaire results, check-ins, meals, blends and weekly plan.
 - Data is stored as JSON documents in `documents`, keyed by profile: `profile`, `prakriti`, `vikriti`, `saved`, `plan`, and month buckets `meals-YYYY-MM` and `checkins-YYYY-MM`.
-- Users can export a profile's data, delete it, delete a profile, or delete their whole account.
+- Users can export a profile's data, delete it, delete a profile, or delete everything.
+- Profiles are tied to the browser: they cannot be opened from another device, and clearing the site's browser data makes them unreachable.
 
 The photo-to-ingredients estimate is not available on the hosted site.
 
