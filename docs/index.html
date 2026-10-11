@@ -99,7 +99,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2px 0 }
 .btn.sm { padding: 6px 12px; font-size: .84rem }
 .btn[disabled] { opacity: .5; cursor: not-allowed }
 label.f { display: flex; flex-direction: column; gap: 5px; font-size: .86rem; font-weight: 600; color: var(--ink-2); min-width: 0 }
-input[type=text], input[type=number], input[type=time], input[type=date], input[type=search], select, textarea { background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 9px 11px; width: 100%; min-width: 0; font-weight: 400; color: var(--ink) }
+input[type=text], input[type=password], input[type=number], input[type=time], input[type=date], input[type=search], select, textarea { background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 9px 11px; width: 100%; min-width: 0; font-weight: 400; color: var(--ink) }
 textarea { resize: vertical; min-height: 84px; line-height: 1.45 }
 input:focus, select:focus, textarea:focus { border-color: var(--sage); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--sage) 25%, transparent) }
 .chips { display: flex; flex-wrap: wrap; gap: 7px }
@@ -2191,7 +2191,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#sheet
 window.addEventListener('hashchange', () => { closeSheet(); readRoute(); if (ui.route === 'home') ui.obOpen = false; render(true); if (ui.pendingSrc) { scrollSrc(ui.pendingSrc); ui.pendingSrc = null; } });
 boot();
 /* ============================================================
-   Hosted build only: profiles stored in Supabase, with no sign-in screen.
+   Hosted build only: Supabase accounts, profiles and storage.
    Loaded last. Its boot, render, flushDb, statusInfo and wipeAll
    replace the ones in 30-core.js (later declarations win).
    ============================================================ */
@@ -2204,7 +2204,7 @@ const errText = e => (e && (e.message || e.error_description)) || 'Something wen
 
 async function boot() {
   await null; // let the rest of the script finish loading first
-  web = { on: webOn(), configured: webOn(), sb: null, session: null, ready: false, profiles: [], pid: null, pname: '', err: '', confirm: null };
+  web = { on: webOn(), sb: null, session: null, ready: false, profiles: [], pid: null, auth: { tab: 'up', name: '', email: '', pass: '', msg: '', err: '', busy: false, recover: false }, pname: '', err: '', confirm: null };
   caps.downloads = { save: async ({ filename, data }) => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([data], { type: 'application/json' })); a.download = filename; document.body.appendChild(a); a.click(); a.remove(); return { status: 'saved' }; } };
   readRoute();
   if (!web.on) {
@@ -2212,42 +2212,33 @@ async function boot() {
     if (local) S = Object.assign(EMPTY(), local, { saved: Object.assign({ meals: [], blends: [] }, local.saved) });
     store.mode = localOK() ? 'local' : 'memory'; web.ready = true; render(true); return;
   }
-  NAV[4][1].push(['account', 'Profiles']);
+  NAV[4][1].push(['account', 'Account and profiles']);
   render(true);
   try {
     web.sb = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseAnonKey);
     web.sb.auth.onAuthStateChange((ev, session) => { setTimeout(() => onAuth(ev, session), 0); });
     const { data, error } = await web.sb.auth.getSession();
     if (error) throw error;
-    if (data.session) await onAuth('INIT', data.session); else await anonSignIn();
-  } catch (e) { localFallback(); }
-}
-// No sign-in screen: each browser gets its own invisible account the first time it opens the site.
-async function anonSignIn() {
-  const { data, error } = await web.sb.auth.signInAnonymously();
-  if (error || !data.session) return localFallback();
-  await onAuth('INIT', data.session);
-}
-// Database unreachable or anonymous sign-ins switched off: keep working, saving to this browser.
-function localFallback() {
-  web.on = false; web.session = null; web.pid = null;
-  const i = NAV[4][1].findIndex(x => x[0] === 'account'); if (i >= 0) NAV[4][1].splice(i, 1);
-  const local = localLoad();
-  S = local ? Object.assign(EMPTY(), local, { saved: Object.assign({ meals: [], blends: [] }, local.saved) }) : EMPTY();
-  resetDrafts(); store.mode = localOK() ? 'local' : 'memory'; web.ready = true; render(true);
+    await onAuth('INIT', data.session);
+  } catch (e) { web.ready = true; web.auth.err = 'Could not reach the database. ' + errText(e); render(true); }
 }
 async function onAuth(ev, session) {
   const was = web.session && web.session.user.id, now = session && session.user.id;
-  if (was === now) { web.session = session; return; }
+  const recover = ev === 'PASSWORD_RECOVERY';
+  if (was === now && web.ready && !recover) { web.session = session; return; }
   web.session = session;
+  if (recover) web.auth.recover = true;
   if (now && now !== was) await loadProfiles();
-  if (!now) { S = EMPTY(); resetDrafts(); web.profiles = []; web.pid = null; store.cache = {}; store.mode = 'pending'; store.sample = false; store.real = null; web.ready = false; render(true); return anonSignIn(); }
+  if (!now) { S = EMPTY(); resetDrafts(); web.profiles = []; web.pid = null; store.cache = {}; store.mode = 'pending'; store.sample = false; store.real = null; }
   web.ready = true; render(true);
 }
 async function loadProfiles() {
   const { data, error } = await web.sb.from('profiles').select('id,name,created_at').order('created_at');
   if (error) { web.err = errText(error); web.profiles = []; web.pid = null; return; }
   web.err = ''; web.profiles = data || [];
+  // First sign-in: turn the name given at sign-up into the first profile.
+  const first = !web.profiles.length && web.session.user.user_metadata && String(web.session.user.user_metadata.name || '').trim().slice(0, 60);
+  if (first) { const made = await web.sb.from('profiles').insert({ name: first }).select('id,name,created_at').single(); if (!made.error && made.data) web.profiles.push(made.data); }
   let pid = null; try { pid = localStorage.getItem(PID_KEY); } catch (e) { }
   if (!web.profiles.find(p => p.id === pid)) pid = web.profiles.length === 1 ? web.profiles[0].id : null;
   if (pid) await openProfile(pid); else web.pid = null;
@@ -2279,7 +2270,7 @@ function statusInfo() {
   if (!web || !web.ready) return ['', 'Loading'];
   if (!web.on) return store.mode === 'local' ? ['warn', 'Saved in this browser only'] : ['bad', 'Not saved: storage is unavailable here'];
   if (store.mode === 'db') { const p = activeProfile(); return store.error ? ['bad', 'Last save failed; will retry on your next change'] : ['ok', 'Saved' + (p ? ' · ' + p.name : '')]; }
-  return ['', 'Choose a profile'];
+  return ['', 'Not signed in'];
 }
 async function wipeAll() {
   if (web && web.on && web.pid) { await store.chain; const { error } = await web.sb.from('documents').delete().eq('profile_id', web.pid); if (error) store.error = 'unavailable'; store.cache = {}; }
@@ -2288,38 +2279,75 @@ async function wipeAll() {
 }
 
 /* ---------- Screens ---------- */
+function authPage() {
+  const a = web.auth;
+  const head = '<a class="brand" href="#home">' + LOGO + '<b>Tridosha</b></a>';
+  const notes = (a.err ? '<div class="note alert small" role="alert">' + esc(a.err) + '</div>' : '') + (a.msg ? '<div class="note calm small" role="status">' + esc(a.msg) + '</div>' : '');
+  if (a.recover) return '<div class="gate stack">' + head + '<section class="panel"><h2>Choose a new password</h2>' + notes + '<label class="f" for="au-pass">New password<input type="password" id="au-pass" autocomplete="new-password" data-inp="au" data-k="pass" value="' + esc(a.pass) + '"></label><p class="small muted">At least 8 characters.</p><button class="btn primary" data-act="au-newpass"' + (a.busy ? ' disabled' : '') + '>Save password</button></section></div>';
+  const up = a.tab === 'up';
+  return '<div class="gate stack">' + head + '<section class="panel"><div class="row">' + seg('au-tab', {}, [['in', 'Sign in'], ['up', 'Create account']], a.tab, 'Sign in or create an account') + '</div><h2>' + (up ? 'Create your account' : 'Welcome back') + '</h2>' + notes +
+    (up ? '<label class="f" for="au-name">Your name<input type="text" id="au-name" maxlength="60" autocomplete="given-name" data-inp="au" data-k="name" value="' + esc(a.name) + '" placeholder="This becomes your first profile"></label>' : '') +
+    '<label class="f" for="au-email">Email<input type="text" inputmode="email" id="au-email" autocomplete="email" data-inp="au" data-k="email" value="' + esc(a.email) + '"></label>' +
+    '<label class="f" for="au-pass">Password<input type="password" id="au-pass" autocomplete="' + (up ? 'new-password' : 'current-password') + '" data-inp="au" data-k="pass" value="' + esc(a.pass) + '"></label>' +
+    (up ? '<p class="small muted">At least 8 characters. You can add more profiles later, for example one per family member.</p>' : '') +
+    '<div class="row between"><button class="btn primary" data-act="au-submit"' + (a.busy ? ' disabled' : '') + '>' + (a.busy ? 'One moment…' : up ? 'Create account' : 'Sign in') + '</button>' + (up ? '' : '<button class="btn quiet" data-act="au-forgot">Forgot password</button>') + '</div></section>' +
+    '<p class="small muted" style="text-align:center">Tridosha is an educational wellness tracker. It does not diagnose or treat anything. Your entries are stored under your account and are not used for advertising.</p></div>';
+}
 function profileRows(manage) {
   return web.profiles.map(p => '<div class="todo"><span class="tick" aria-hidden="true" style="' + (p.id === web.pid ? 'background:var(--sage);border-color:var(--sage);color:var(--surface)' : '') + '">' + (p.id === web.pid ? '✓' : '') + '</span><div><b>' + esc(p.name) + '</b><div class="small muted">' + (p.id === web.pid ? 'Active now' : 'Added ' + fmtDate(String(p.created_at).slice(0, 10))) + '</div></div><div class="row" style="justify-content:flex-end">' + (p.id === web.pid ? '' : '<button class="btn sm' + (manage ? '' : ' primary') + '" data-act="pr-open" data-id="' + p.id + '">' + (manage ? 'Switch to' : 'Open') + '</button>') + (manage ? '<button class="btn sm quiet" data-act="pr-rename" data-id="' + p.id + '">Rename</button>' + (web.confirm === 'pr' + p.id ? '<button class="btn sm danger" data-act="pr-del" data-id="' + p.id + '">Confirm delete</button>' : '<button class="btn sm quiet" data-act="pr-del" data-id="' + p.id + '">Delete</button>') : '') + '</div></div>').join('');
 }
 function profileAdd() { return '<div class="row" style="align-items:flex-end"><label class="f" for="pr-name" style="flex:1 1 12rem">' + (web.rename ? 'New name' : 'Add a profile') + '<input type="text" id="pr-name" maxlength="60" data-inp="pr-name" value="' + esc(web.pname) + '" placeholder="For example Asha, Dad, or Me"></label><button class="btn primary" data-act="pr-add">' + (web.rename ? 'Save name' : 'Add profile') + '</button>' + (web.rename ? '<button class="btn" data-act="pr-cancel">Cancel</button>' : '') + '</div>'; }
 function profilePicker() {
-  return '<div class="gate stack">' + '<a class="brand" href="#home">' + LOGO + '<b>Tridosha</b></a><section class="panel"><h2>' + (web.profiles.length ? 'Who is this for?' : 'Add your first profile') + '</h2><p class="small muted">Each profile keeps its own questionnaire results, check-ins, meals and plan. No sign-in needed: they are saved for this browser.</p>' + (web.err ? '<div class="note alert small" role="alert">' + esc(web.err) + '</div>' : '') + (web.profiles.length ? '<div>' + profileRows(false) + '</div>' : '') + profileAdd() + '</section></div>';
+  return '<div class="gate stack">' + '<a class="brand" href="#home">' + LOGO + '<b>Tridosha</b></a><section class="panel"><h2>' + (web.profiles.length ? 'Who is this for?' : 'Add your first profile') + '</h2><p class="small muted">Each profile keeps its own questionnaire results, check-ins, meals and plan. Signed in as ' + esc(web.session.user.email || '') + '.</p>' + (web.err ? '<div class="note alert small" role="alert">' + esc(web.err) + '</div>' : '') + (web.profiles.length ? '<div>' + profileRows(false) + '</div>' : '') + profileAdd() + '<div class="row"><button class="btn quiet" data-act="au-out">Sign out</button></div></section></div>';
 }
 function accountPage() {
-  return pagehead('Profiles', 'Whose data is open', 'Add up to 12 profiles, for example one per family member. Switching profiles swaps every page of the app to that person\'s entries.') +
+  return pagehead('Account and profiles', 'Who is signed in, and whose data is open', 'One account can hold up to 12 profiles. Switching profiles swaps every page of the app to that person\'s entries.') +
     '<section class="panel"><header><h2>Profiles</h2><span class="small muted num">' + web.profiles.length + ' of 12</span></header>' + (web.err ? '<div class="note alert small" role="alert">' + esc(web.err) + '</div>' : '') + '<div>' + profileRows(true) + '</div>' + profileAdd() + '<p class="small muted">Deleting a profile permanently removes its assessments, check-ins, meals, blends and plan.</p></section>' +
-    '<section class="panel"><h2>Where this is kept</h2><p class="small" style="max-width:42rem">There is no sign-in. The first time this browser opened the site it was given its own private space in the database, and these profiles live there. Other visitors cannot see them. Because nothing ties that space to an email address, the profiles cannot be opened from another device, and clearing this site\'s browser data makes them unreachable. Use Export on the Profile and privacy page to keep a copy.</p><div class="row">' + (web.confirm === 'account' ? '<span class="note alert small" style="flex:1 1 18rem">This permanently deletes every profile saved from this browser. <button class="btn sm danger" data-act="au-delete">Yes, delete everything</button> <button class="btn sm" data-act="pr-cancel">Keep it</button></span>' : '<button class="btn danger" data-act="au-delete-ask">Delete all profiles</button>') + '</div></section>';
+    '<section class="panel"><h2>Account</h2><dl class="kv"><dt>Signed in as</dt><dd>' + esc(web.session.user.email || '') + '</dd><dt>Data</dt><dd class="small">Stored in the project database. Row-level security lets only your signed-in account read or change your rows.</dd></dl><div class="row"><button class="btn" data-act="au-out">Sign out</button>' + (web.confirm === 'account' ? '<span class="note alert small" style="flex:1 1 18rem">This permanently deletes your account and every profile in it. <button class="btn sm danger" data-act="au-delete">Yes, delete my account</button> <button class="btn sm" data-act="pr-cancel">Keep it</button></span>' : '<button class="btn danger" data-act="au-delete-ask">Delete my account</button>') + '</div></section>';
 }
 PAGES.account = () => (web && web.on && web.session ? accountPage() : PAGES.home());
 const _settings = PAGES.settings, _sources = PAGES.sources;
-PAGES.settings = () => { const h = _settings(); return web && web.on ? h.replace('Each person who opens this page gets a private space tied to their own account. Other viewers, including whoever shared the page with you, cannot read it.', 'Stored in the project database under the active profile, in a private space belonging to this browser. Other visitors cannot read it. <a href="#account">Manage profiles</a>').replace('>Delete all my data<', '>Delete this profile\'s data<') : h; };
-PAGES.sources = () => _sources().replace('Sign-in comes from your Claude account;', 'No sign-up: each browser gets a private space, with profiles inside it;').replace('Claude account identity and a private per-person document store', 'Supabase anonymous sessions, profiles per browser, and a document table locked by row-level security').replace('It is not the Next.js and Supabase codebase the specification names; a published page cannot ship a server, migrations or a test runner.', 'It is a static site with Supabase storage, not the Next.js codebase the specification names.');
+PAGES.settings = () => { const h = _settings(); return web && web.on ? h.replace('Each person who opens this page gets a private space tied to their own account. Other viewers, including whoever shared the page with you, cannot read it.', 'Stored in the project database under your account and the active profile. Only your signed-in account can read or change it. <a href="#account">Manage profiles</a>').replace('>Delete all my data<', '>Delete this profile\'s data<') : h; };
+PAGES.sources = () => _sources().replace('Sign-in comes from your Claude account;', 'Sign up with an email and password;').replace('Claude account identity and a private per-person document store', 'Supabase email accounts, profiles per account, and a document table locked by row-level security').replace('It is not the Next.js and Supabase codebase the specification names; a published page cannot ship a server, migrations or a test runner.', 'It is a static site with Supabase accounts and storage, not the Next.js codebase the specification names.');
 
 function render(top) {
   const key = top ? null : focusKey(document.activeElement);
-  const gate = web && web.on && (!web.ready || !web.session || !web.pid);
+  const gate = web && web.on && (!web.ready || !web.session || web.auth.recover || !web.pid);
   document.querySelector('.app').classList.toggle('locked', !!gate);
   renderNav();
-  if (web && web.ready && !web.configured && !store.sample) $('#banner').innerHTML = '<div class="banner"><span><b>Demo mode.</b> No database is connected, so entries stay in this browser. Add your Supabase details to config.js to turn on profiles.</span></div>';
-  $('#view').innerHTML = !web || !web.ready ? '<div class="empty" style="margin-top:12vh">Loading…</div>' : gate ? (web.session ? profilePicker() : '<div class="empty" style="margin-top:12vh">Loading…</div>') : PAGES[ui.route]();
+  if (web && web.ready && !web.on && !store.sample) $('#banner').innerHTML = '<div class="banner"><span><b>Demo mode.</b> No database is connected, so entries stay in this browser. Add your Supabase details to config.js to turn on accounts and profiles.</span></div>';
+  $('#view').innerHTML = !web || !web.ready ? '<div class="empty" style="margin-top:12vh">Loading…</div>' : gate ? (!web.session || web.auth.recover ? authPage() : profilePicker()) : PAGES[ui.route]();
   if (top) window.scrollTo(0, 0);
   else if (key) { const el = document.querySelector('#view ' + key); if (el) { el.focus({ preventScroll: true }); if (el.tagName === 'INPUT' && (el.type === 'text' || el.type === 'password')) { try { el.setSelectionRange(el.value.length, el.value.length); } catch (e) { } } } }
 }
 
 /* ---------- Actions ---------- */
+async function authSubmit() {
+  const a = web.auth, email = a.email.trim();
+  a.err = ''; a.msg = '';
+  const name = a.name.trim().slice(0, 60);
+  if (a.tab === 'up' && !name) { a.err = 'Enter your name. It becomes your first profile.'; return render(); }
+  if (!/^\S+@\S+\.\S+$/.test(email)) { a.err = 'Enter a valid email address.'; return render(); }
+  if (a.pass.length < 8) { a.err = 'Use a password of at least 8 characters.'; return render(); }
+  a.busy = true; render();
+  try {
+    if (a.tab === 'up') {
+      const { data, error } = await web.sb.auth.signUp({ email, password: a.pass, options: { emailRedirectTo: location.origin + location.pathname, data: { name } } });
+      if (error) throw error;
+      if (!data.session) { a.msg = 'Almost there. Open the confirmation link sent to ' + email + ', then sign in.'; a.tab = 'in'; }
+    } else { const { error } = await web.sb.auth.signInWithPassword({ email, password: a.pass }); if (error) throw error; }
+    a.pass = '';
+  } catch (e) { a.err = errText(e); }
+  a.busy = false; render();
+}
 Object.assign(ACT, {
+  'au-tab': d => { Object.assign(web.auth, { tab: d.v, err: '', msg: '' }); render(); },
+  'au-submit': () => authSubmit(),
+  'au-forgot': async () => { const a = web.auth, email = a.email.trim(); a.err = ''; a.msg = ''; if (!/^\S+@\S+\.\S+$/.test(email)) { a.err = 'Enter your email address first, then choose Forgot password.'; return render(); } const { error } = await web.sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname }); if (error) a.err = errText(error); else a.msg = 'If an account exists for ' + email + ', a reset link is on its way.'; render(); },
+  'au-newpass': async () => { const a = web.auth; a.err = ''; if (a.pass.length < 8) { a.err = 'Use a password of at least 8 characters.'; return render(); } a.busy = true; render(); const { error } = await web.sb.auth.updateUser({ password: a.pass }); a.busy = false; if (error) a.err = errText(error); else { a.recover = false; a.pass = ''; toast('Password updated'); } render(true); },
+  'au-out': async () => { await store.chain; await web.sb.auth.signOut(); toast('Signed out'); },
   'au-delete-ask': () => { web.confirm = 'account'; render(); },
-  'au-delete': async () => { const { error } = await web.sb.rpc('delete_my_account'); if (error) { web.err = errText(error); web.confirm = null; return render(); } try { localStorage.removeItem(PID_KEY); } catch (e) { } web.confirm = null; await web.sb.auth.signOut(); toast('Everything deleted'); },
+  'au-delete': async () => { const { error } = await web.sb.rpc('delete_my_account'); if (error) { web.err = errText(error); web.confirm = null; return render(); } try { localStorage.removeItem(PID_KEY); } catch (e) { } web.confirm = null; await web.sb.auth.signOut(); toast('Account deleted'); },
   'pr-open': async d => { if (await openProfile(d.id)) { toast('Now using ' + activeProfile().name); go('home'); } else render(); },
   'pr-add': async () => {
     const name = (($('#pr-name') || {}).value || web.pname).trim().slice(0, 60);
@@ -2343,6 +2371,7 @@ Object.assign(ACT, {
     toast('Profile deleted'); render(true);
   }
 });
+INP.au = (v, d) => { web.auth[d.k] = v; };
 INP['pr-name'] = v => { web.pname = v; };
-document.addEventListener('keydown', e => { if (e.key !== 'Enter' || !web) return; if (e.target.id === 'pr-name') ACT['pr-add'](); });
+document.addEventListener('keydown', e => { if (e.key !== 'Enter' || !web) return; if (e.target.id === 'au-name' || e.target.id === 'au-email' || e.target.id === 'au-pass') (web.auth.recover ? ACT['au-newpass'] : ACT['au-submit'])(); if (e.target.id === 'pr-name') ACT['pr-add'](); });
 </script></body></html>
