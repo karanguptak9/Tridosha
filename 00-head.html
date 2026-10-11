@@ -203,6 +203,11 @@ td.n, th.n { text-align: right; font-variant-numeric: tabular-nums }
 }
 @media (min-width: 901px) { .foodrow .effs { display: contents } }
 @media (prefers-reduced-motion: no-preference) { .progress i, .meter .track i { transition: width .35s ease } }
+/* Hosted build: account and profile screens */
+.app.locked { grid-template-columns: minmax(0, 1fr) }
+.app.locked .side, .app.locked .tabs { display: none }
+.gate { max-width: 27rem; width: 100%; margin: 4vh auto 0 }
+.gate .brand { justify-content: center; padding-bottom: 8px }
 </style>
 
 <div class="app">
